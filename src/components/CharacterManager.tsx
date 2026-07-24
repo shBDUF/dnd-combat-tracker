@@ -436,7 +436,7 @@ function InventoryList({
 // ─── Main Component ────────────────────────────────────────────────────────
 
 export function CharacterManager() {
-  const { activeCampaign, addCharacter, removeCharacter, updateCharacter } =
+  const { activeCampaign, addCharacter, removeCharacter, updateCharacter, createCampaign } =
     useCampaignStore();
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState('');
@@ -505,9 +505,13 @@ export function CharacterManager() {
   // ── Handlers ──
   const handleImport = useCallback(
     (character: CharacterSheet, _mode: 'campaign' | 'global') => {
+      // Auto-create default campaign if none exists
+      if (!activeCampaign) {
+        createCampaign('My Characters', 'Default campaign for imported characters');
+      }
       addCharacter(character);
     },
-    [addCharacter]
+    [addCharacter, activeCampaign, createCampaign]
   );
 
   const handleDeleteConfirm = useCallback(() => {
