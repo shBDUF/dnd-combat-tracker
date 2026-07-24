@@ -424,6 +424,149 @@ export function parseCharacter(input: string | LssExportItem): LssParseResult {
   }
 }
 
+// ─── exportCharacter ──────────────────────────────────────────────────────────
+// Converts a CharacterSheet back to LSS JSON format (symmetrical with import).
+// Key principle: export format == import format.
+// If the character was imported from LSS (source === 'lss'), we preserve the
+// original lssRaw data. Otherwise, we build an LSS-compatible structure.
+export function exportCharacter(character: CharacterSheet): string {
+  // Prefer original LSS raw data if available (round-trip preservation)
+  if (character.source === 'lss' && character.lssRaw) {
+    const lssRaw = character.lssRaw as Record<string, unknown>;
+    // Update mutable fields in the original data
+    if (lssRaw.vitality) {
+      const v = lssRaw.vitality as Record<string, unknown>;
+      if (v['hp-current']) (v['hp-current'] as Record<string, unknown>).value = character.currentHp;
+      if (v['hp-temp']) (v['hp-temp'] as Record<string, unknown>).value = character.tempHp;
+      if (v['hp-max']) (v['hp-max'] as Record<string, unknown>).value = character.maxHp;
+      // Death saves
+      (v as Record<string, unknown>).isDying = character.currentHp <= 0;
+      (v as Record<string, unknown>).deathFails = character.deathsaves.failures;
+      (v as Record<string, unknown>).deathSuccesses = character.deathsaves.successes;
+    }
+    if (lssRaw.spells && character.spellList) {
+      for (const [level, slot] of Object.entries(character.spellList.slots)) {
+        const key = `slots-${level}`;
+        if (!(lssRaw.spells as Record<string, unknown>)[key]) {
+          (lssRaw.spells as Record<string, unknown>)[key] = { value: 0, filled: 0 };
+        }
+        const s = (lssRaw.spells as Record<string, unknown>)[key] as Record<string, unknown>;
+        s.value = slot.total;
+        s.filled = slot.used;
+      }
+    }
+    // Rebuild the top-level item
+    const exportItem: Record<string, unknown> = {
+      tags: [],
+      disabledBlocks: {},
+      edition: '2024',
+      spells: { mode: 'cards', prepared: [], book: [], edition: '2024' },
+      data: JSON.stringify(lssRaw),
+    };
+    return JSON.stringify(exportItem, null, 2);
+  }
+
+  // Build from scratch (manual character or no lssRaw)
+  const data: Record<string, unknown> = {
+    jsonType: 'character',
+    template: 'default',
+    name: { value: character.name },
+    info: {
+      charClass: { name: 'charClass', value: character.class[0] || '' },
+      charSubclass: { name: 'charSubclass', value: '' },
+      level: { name: 'level', value: character.level },
+      background: { name: 'background', value: '' },
+      playerName: { name: 'playerName', value: '' },
+      race: { name: 'race', value: character.race },
+      alignment: { name: 'alignment', value: '' },
+      experience: { name: 'experience', value: 0 },
+    },
+    subInfo: {},
+    spellsInfo: {
+      base: { name: 'base', value: '', code: character.spellList?.spellcastingAbility || 'cha' },
+      save: { name: 'save', value: '', customModifier: character.spellList?.spellSaveDC || 10 },
+      mod: { name: 'mod', value: '', customModifier: character.spellList?.spellAttackBonus || 5 },
+      available: { classes: [character.class[0]?.toLowerCase() || ''] },
+    },
+    spells: {},
+    spellsPact: {},
+    bonuses: [],
+    proficiency: 2,
+    stats: {},
+    saves: {},
+    skills: {},
+    vitality: {
+      'hp-max': { value: character.maxHp },
+      'hp-current': { value: character.currentHp },
+      'hp-temp': { value: character.tempHp },
+      ac: { value: character.ac },
+      speed: { value: character.speed },
+      'hit-die': { value: 'd8' },
+      'hp-dice-current': { value: 0 },
+      isDying: character.currentHp <= 0,
+      deathFails: character.deathsaves.failures,
+      deathSuccesses: character.deathsaves.successes,
+    },
+    weaponsList: [],
+    attunementsList: [],
+    coins: { gp: { value: 0 }, sp: { value: 0 }, cp: { value: 0 }, pp: { value: 0 }, ep: { value: 0 } },
+    resources: {},
+    proficiencies: character.proficiencies || [],
+    features: character.features?.map((f: string) => ({ name: f, description: '' })) || [],
+    traits: character.traits?.map((t: string) => ({ name: t, description: '' })) || [],
+  };
+
+  // Stats
+  const statKeys: DndStat[] = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+  for (const s of statKeys) {
+    (data.stats as Record<string, unknown>)[s] = {
+      name: s, score: character.stats[s], modifier: Math.floor((character.stats[s] - 10) / 2), race: 0,
+    };
+  }
+
+  // Saving throws
+  for (const s of statKeys) {
+    (data.saves as Record<string, unknown>)[s] = { name: s, isProf: character.savingThrows[s] !== undefined };
+  }
+
+  // Spell slots
+  if (character.spellList?.slots) {
+    for (const [level, slot] of Object.entries(character.spellList.slots)) {
+      (data.spells as Record<string, unknown>)[`slots-${level}`] = { value: slot.total, filled: slot.used };
+    }
+  }
+
+  // Inventory
+  if (character.inventory) {
+    for (const item of character.inventory) {
+      if (item.isMagical) {
+        (data.attunementsList as Array<unknown>).push({
+          id: `attunement-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          checked: item.isEquipped,
+          value: item.name,
+        });
+      } else {
+        (data.weaponsList as Array<unknown>).push({
+          id: `weapon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: { value: item.name },
+          mod: { value: '+0' },
+          dmg: { value: item.description || '' },
+        });
+      }
+    }
+  }
+
+  const exportItem: Record<string, unknown> = {
+    tags: [],
+    disabledBlocks: {},
+    edition: '2024',
+    spells: { mode: 'cards', prepared: [], book: [], edition: '2024' },
+    data: JSON.stringify(data),
+  };
+
+  return JSON.stringify(exportItem, null, 2);
+}
+
 // ─── parseMultiple ───────────────────────────────────────────────────────────
 // Parses an array of LSS export items.
 export function parseMultiple(
