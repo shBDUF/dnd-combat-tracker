@@ -17,15 +17,15 @@ import {
   resetActionTracker,
   useAction,
   setMovement,
-} from '../groups';
-import { createId } from '../../types/index';
+} from '../src/engine/groups';
+import { createId } from '../src/types/index';
 import type {
   Combatant,
   Encounter,
   StartBattleParams,
   InitiativeGroup,
   ActionTracker,
-} from '../../types/index';
+} from '../src/types/index';
 
 // ─── Factory helpers ──────────────────────────────────────────────────────────
 

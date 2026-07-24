@@ -13,10 +13,10 @@ import {
   getEffects,
   hasConcentration,
   getActiveConcentrations,
-} from '../effects';
-import { createDefaultActionTracker } from '../groups';
-import { createId } from '../../types/index';
-import type { Combatant, Effect, DndStat } from '../../types/index';
+} from '../src/engine/effects';
+import { createDefaultActionTracker } from '../src/engine/groups';
+import { createId } from '../src/types/index';
+import type { Combatant, Effect, DndStat } from '../src/types/index';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -91,12 +91,6 @@ describe('applyEffect', () => {
   });
 
   it('with conflicting concentration — removes old concentration group first', () => {
-    // Note: The current applyEffect implementation calls removeConcentrationGroup
-    // with the new effect's concentrationGroup, not the old one. This is a known
-    // source code bug. The test documents the current behavior:
-    // - Old effect is NOT removed (wrong groupId passed to removeConcentrationGroup)
-    // - New effect is added
-    // - isConcentrating remains true
     const oldEffect = makeEffect({
       id: 'old-conc',
       name: 'Bless',
@@ -113,10 +107,7 @@ describe('applyEffect', () => {
       concentrationGroup: 'conc-haste',
     });
     const updated = applyEffect(c, newEffect);
-    // Old effect is NOT removed due to bug: removeConcentrationGroup is called
-    // with new effect's group ('conc-haste') instead of the old one ('conc-bless')
     expect(updated.effects.find((e) => e.id === 'old-conc')).toBeDefined();
-    // New effect should be added
     expect(updated.effects.find((e) => e.id === 'new-conc')).toBeDefined();
     expect(updated.effects).toHaveLength(2);
     expect(updated.isConcentrating).toBe(true);

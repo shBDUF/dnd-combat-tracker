@@ -19,10 +19,10 @@ import {
   rollDamage,
   rollD20,
   rollD100,
-} from '../roll';
-import { createDefaultActionTracker } from '../groups';
-import { createId } from '../../types/index';
-import type { Combatant, Encounter, InitiativeGroup } from '../../types/index';
+} from '../src/engine/roll';
+import { createDefaultActionTracker } from '../src/engine/groups';
+import { createId } from '../src/types/index';
+import type { Combatant, Encounter, InitiativeGroup } from '../src/types/index';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

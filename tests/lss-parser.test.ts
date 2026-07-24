@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { parseCharacter, parseMultiple } from '../lss-parser';
+import { parseCharacter, parseMultiple } from '../src/import/lss-parser';
 
 // ─── Minimal valid LSS fixture ───────────────────────────────────────────────
 
