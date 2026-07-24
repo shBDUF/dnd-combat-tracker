@@ -1,6 +1,9 @@
 node_modules/
 dist/
-*.js.map
-*.d.ts.map
+.vite/
+*.tsbuildinfo
 .DS_Store
 *.log
+errors.txt
+err.txt
+$null
