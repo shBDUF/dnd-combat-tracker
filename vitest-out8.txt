@@ -1,0 +1,42 @@
+
+[1m[7m[36m RUN [39m[27m[22m [36mv3.0.9 [39m[90md:/dnd-combat-tracker[39m
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseCharacter[2m > [22m[2mwith valid LSS JSON string returns { success: true, character }
+[22m[39mLSS Parser: Missing race field
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseCharacter[2m > [22m[2mwith minimal valid data (name, class, level, stats, hp, ac)
+[22m[39mLSS Parser: Missing race field
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseCharacter[2m > [22m[2mparses Russian stat keys (сила→str, ловкость→dex)
+[22m[39mLSS Parser: Missing race field
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseCharacter[2m > [22m[2mhandles LSS array format (takes first element)
+[22m[39mLSS Parser: Missing race field
+LSS Parser: Missing speed field, defaulting to 30
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseCharacter[2m > [22m[2mhandles LssExportItem object directly
+[22m[39mLSS Parser: Missing race field
+LSS Parser: Missing speed field, defaulting to 30
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseCharacter[2m > [22m[2mparsed character has correct structure: CharacterSheet with id, name, class[], level, stats, ac, maxHp, speed
+[22m[39mLSS Parser: Missing race field
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseCharacter[2m > [22m[2mparsed character has source: "lss"
+[22m[39mLSS Parser: Missing race field
+
+[90mstderr[2m | src/import/__tests__/lss-parser.test.ts[2m > [22m[2mparseMultiple[2m > [22m[2mparses an array of LSS items
+[22m[39mLSS Parser: Missing race field
+LSS Parser: Missing speed field, defaulting to 30
+LSS Parser: Missing race field
+LSS Parser: Missing speed field, defaulting to 30
+
+ [32m✓[39m src/import/__tests__/lss-parser.test.ts [2m([22m[2m12 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m src/engine/__tests__/effects.test.ts [2m([22m[2m25 tests[22m[2m)[22m[90m 7[2mms[22m[39m
+ [32m✓[39m src/engine/__tests__/groups.test.ts [2m([22m[2m33 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m src/engine/__tests__/roll.test.ts [2m([22m[2m34 tests[22m[2m)[22m[90m 15[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m104 passed[39m[22m[90m (104)[39m
+[2m   Start at [22m 00:55:16
+[2m   Duration [22m 349ms[2m (transform 172ms, setup 0ms, collect 282ms, tests 36ms, environment 0ms, prepare 456ms)[22m
+
