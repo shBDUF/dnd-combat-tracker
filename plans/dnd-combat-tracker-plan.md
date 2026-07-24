@@ -97,12 +97,15 @@ erDiagram
   isGroup: boolean,         // true для "5x Goblin"
   groupHp?: {
     individualHp: number,   // HP одной особи (например 7 для гоблина)
-    currentPool: number,    // текущее суммарное HP
+    totalCurrentHp: number, // текущее суммарное HP всей группы
     aliveCount: number,     // сколько живых осталось
-    // Правила:
-    // - Урон применяется к individualHp. Если урон >= individualHp — одна особь умирает
-    // - Избыточный урон НЕ переходит (D&D 5e RAW)
-    // - AoE: каждый получает отдельный урон
+    // Правила D&D 5e RAW:
+    // - Обычная атака: урон списывается с individualHp. Если урон >= individualHp — одна особь умирает.
+    //   Избыточный урон НЕ переходит на следующую особь (D&D 5e RAW).
+    // - DM может целенаправленно атаковать конкретную особь: урон списывается с individualHp,
+    //   остальные особи группы не получают урона.
+    // - AoE: каждый участник группы получает отдельный полный урон.
+    // - totalCurrentHp = aliveCount * individualHp (вычисляется, служит для быстрого визуального отображения)
   },
   
   // Ссылка на полный профиль
@@ -276,6 +279,58 @@ erDiagram
 }
 ```
 
+### 2.3. Long Story Short JSON — спецификация импорта
+
+Long Story Short (LSS) экспортирует массив персонажей. Каждый элемент массива имеет структуру:
+
+```json
+{
+  "id": "string",
+  "edition": "2014" | "2024",
+  "spells": { "mode": "cards", "prepared": ["id1", "id2"], "book": [] },
+  "data": "{ ... }",
+  "tags": [],
+  "disabledBlocks": { ... }
+}
+```
+
+**Парсинг `data` (JSON-строка) → CharacterSheet:**
+
+| LSS поле | CharacterSheet поле |
+|----------|---------------------|
+| `name.value` | `name` |
+| `info.charClass.value` | `classes[0].className` |
+| `info.charSubclass.value` | `classes[0].subClass` |
+| `info.level.value` | `classes[0].level` |
+| `info.background.value` | `background` |
+| `info.race.value` | `race` |
+| `info.alignment.value` | `alignment` |
+| `info.experience.value` | `experience` |
+| `stats.*.score` | `abilityScores.*` |
+| `proficiency` | `proficiencyBonus` |
+| `vitality.hp-max.value` | `maxHp` |
+| `vitality.hp-current.value` | → `Combatant.currentHp` |
+| `vitality.hp-temp.value` | → `Combatant.temporaryHp` |
+| `vitality.ac.value` | `armorClass` |
+| `vitality.speed.value` | `speed` |
+| `vitality.hit-die.value` | `classes[0].hitDie` |
+| `vitality.hp-dice-current.value` | `hitDice[0].used` |
+| `vitality.isDying` | → `deathSaves` |
+| `vitality.deathFails` | → `deathSaves.failures` |
+| `vitality.deathSuccesses` | → `deathSaves.successes` |
+| `saves.*.isProf` | `savingThrows.*` |
+| `skills.*.isProf` | `skills.*.proficient` |
+| `spells.slots-{N}.value` | `spellLists[0].spellSlots[N]` |
+| `spellsPact.slots-{N}.value` | `pactMagic.slotCount` |
+| `coins.*.value` | → `inventory[].coins` |
+
+**Особенности:**
+- **Мультикласс**: LSS хранит один `charClass`. Для мультикласса нужно дополнять вручную после импорта.
+- **Spell IDs**: LSS использует внутренние `_id`. Импорт заклинаний требует маппинга ID → название (через RAG или ручной ввод).
+- **Pact Magic**: Отдельный объект `spellsPact` (для колдунов).
+- **Death Saves**: Хранятся в `vitality` (isDying, deathFails, deathSuccesses).
+- **При импорте** `data` — JSON-строка внутри верхнего объекта, требует `JSON.parse()`.
+
 #### Action (действие)
 ```
 type Action = {
@@ -310,10 +365,11 @@ type Trait = {
   // Статы
   armorClass: number,
   maxHp: number,
-  speed: { walk?: number, fly?: number, swim?: number, climb?: number },
+  speed: { walk?: number, fly?: number, swim?: number, climb?: number, burrow?: number },
   abilityScores: { str, dex, con, int, wis, cha },
   savingThrows: { str?: number, dex?: number, ... },
   skills: { [skillName]: number },
+  senses: { [senseName: string]: string },  // e.g. { darkvision: "60ft", blindsight: "30ft", tremorsense: "30ft" }
   
   // Уязвимости/иммунитеты
   damageResistances: string[],
@@ -359,7 +415,11 @@ type Trait = {
 {
   successes: number,  // 0-3
   failures: number,   // 0-3
-  stabilized: boolean
+  stabilized: boolean,
+  // Natural 1/20: специальные результаты
+  // Natural 20 → stabilize + 1HP (3 successes + revived)
+  // Natural 1 → 2 failures
+  // Эти случаи обрабатываются в Condition Engine (B3.applyDeathSave)
 }
 ```
 
@@ -380,7 +440,10 @@ type Trait = {
   notes: string,
   
   // Трекер легендарных действий — счётчик использованных действий на combatant-монстра
-  // Восстанавливается в начале хода монстра (3 по умолчанию)
+  // Сброс legendaryActionTracker[combatantId] = MonsterBlock.legendaryActionCount
+  // происходит в Engine API (tickRound / nextTurn) при начале хода монстра
+  // Логика: при переходе хода на combatantId, если combatant — монстр с legendaryActionCount,
+  // сбрасываем его legendaryActionTracker[combatantId] = legendaryActionCount
   legendaryActionTracker: { [combatantId: UUID]: number }
 }
 ```
@@ -853,7 +916,7 @@ flowchart LR
 
 | Проблема | Описание | Решение |
 |----------|----------|---------|
-| **Combatant перегружен** | В одну структуру свалены и боевые характеристики, и ресурсы, и ячейки, и позиция | Убрать тяжелые поля (abilityScores, savingThrows, skills, hitDice, spellSlots, resources), оставить только боевые. `conditions` и `effects` остаются в Combatant — они требуются в бою и невелики по размеру. `profileId: UUID` + `profileType: character \| monster` ссылаются на отдельные сущности. |
+| **Combatant перегружен** | В одну структуру свалены и боевые характеристики, и ресурсы, и ячейки, и позиция | Убрать тяжелые поля (abilityScores, savingThrows, skills, hitDice, spellSlots, resources), оставить только боевые. `conditions`, `effects`, `deathSaves`, `exhaustion` остаются в Combatant — они требуются в бою и невелики по размеру. `profileId: UUID` + `profileType: character \| monster` ссылаются на отдельные сущности. |
 | **Encounter.turnOrder дублирует combatants** | Два массива одних и тех же объектов — рассинхронизация при изменениях | Хранить `turnOrder: UUID[]` — только ID участников, сортированные по инициативе. |
 | **Нет групповых монстров** | 20 гоблинов = 20 отдельных записей в очереди | Добавить `isGroup: boolean` и `count: number`. HP считается как count x hp. |
 | **Мультиклассирование** | Ячейки заклинаний считаются от одного класса, но при мультиклассе они общие | Разделить `spellSlots` общие и `spellLists: { className, preparedSpells[], slotsContributionLevel }[]` |
