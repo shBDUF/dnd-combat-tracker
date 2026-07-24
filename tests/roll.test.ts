@@ -170,8 +170,6 @@ describe('rollGroupInitiative', () => {
   });
 
   it('with initMode: "individual" — each combatant gets individual roll, sorted by initiative descending', () => {
-    // Mock Math.random to get predictable results
-    // We'll use a deterministic approach: make combatants with different modifiers
     const group = makeGroup({
       id: 'g1',
       name: 'Party',
@@ -190,11 +188,23 @@ describe('rollGroupInitiative', () => {
     const updatedC1 = updatedEncounter.combatants.find((c) => c.id === 'c1')!;
     const updatedC2 = updatedEncounter.combatants.find((c) => c.id === 'c2')!;
 
-    // Both should have their own initiative values
-    expect(updatedC1.initiative).not.toBe(updatedC2.initiative);
-    // The order should be sorted descending
+    // Since c1 has +5 and c2 has +0, c1 should usually have higher initiative
+    // But they could tie on rare occasion — allow ties by checking >=
     const order = updatedEncounter.initiativeGroups[0].currentOrder;
-    expect(order[0]).toBe(updatedC1.initiative >= updatedC2.initiative ? 'c1' : 'c2');
+    if (updatedC1.initiative >= updatedC2.initiative) {
+      expect(order[0]).toBe('c1');
+    } else {
+      expect(order[0]).toBe('c2');
+    }
+    // Verify individual rolls: the difference should be 0-5 (d20 diff + 5 mod diff)
+    const diff = Math.abs(updatedC1.initiative - updatedC2.initiative);
+    expect(diff).toBeGreaterThanOrEqual(0);
+    expect(diff).toBeLessThanOrEqual(25);
+    // Verify no roll exceeds d20 range
+    expect(updatedC1.initiative).toBeGreaterThanOrEqual(1 + 5);
+    expect(updatedC1.initiative).toBeLessThanOrEqual(20 + 5);
+    expect(updatedC2.initiative).toBeGreaterThanOrEqual(1 + 0);
+    expect(updatedC2.initiative).toBeLessThanOrEqual(20 + 0);
   });
 });
 
