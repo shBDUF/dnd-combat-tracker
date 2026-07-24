@@ -129,14 +129,18 @@ export interface Combatant {
   isPlayer: boolean;
   isMonster: boolean;
   monsterId?: string; // reference to monster template
-  groupId?: UUID; // for group monsters
-  isGroup: boolean;
-  groupSize: number;
-  individualHp: number; // per-individual HP for group monsters
+  groupId?: UUID; // for group monsters (legacy, kept for migration)
   deathsaves: DeathSaves;
   sortIndex: number; // tiebreaker for initiative
   isDead: boolean;
   notes: string;
+  // ── Track C: Initiative Groups + Action Economy ──
+  initiativeGroupId: UUID | null;  // ссылка на InitiativeGroup.id
+  actionTracker: ActionTracker;    // трекинг действий в этом раунде
+  speed: number;                   // скорость в ft (для movement tracking)
+  combatantGroupId: UUID | null;   // для групповых монстров (5x Goblin), общий ID
+  combatantGroupSize: number;      // сколько всего в группе монстров
+  combatantGroupIndex: number;     // индекс этого конкретного монстра (0..groupSize-1)
 }
 
 // ─── CharacterSheet (player character profile) ───────────────────────────────
@@ -259,19 +263,151 @@ export interface Trait {
   description: string;
 }
 
-// ─── Encounter (active combat) ───────────────────────────────────────────────
+// ─── Track C: Initiative Groups + Action Economy ─────────────────────────────
+
+// ─── InitiativeGroup ──────────────────────────────────────────────────────────
+export interface InitiativeGroup {
+  id: UUID;
+  name: string;                    // "Players", "Monsters", "Goblin Squad"
+  type: 'players' | 'monsters' | 'allies' | 'npc';
+  initiative: number;              // общий бросок d20 + модификатор группы
+  initModifier: number;            // модификатор инициативы группы (среднее арифметическое бонусов участников, округлённое вверх)
+  initMode: 'group' | 'individual'; // group = общая инициатива, individual = каждый сам за себя
+  combatantIds: UUID[];            // участники группы (ссылки на Combatant.id)
+  currentOrder: UUID[];            // порядок хода ВНУТРИ группы в ЭТОМ раунде
+  currentIndex: number;            // индекс текущего ходящего внутри currentOrder
+  isActive: boolean;               // false если группа побеждена/удалена
+}
+
+// ─── ActionTracker ────────────────────────────────────────────────────────────
+export interface ActionTracker {
+  action: boolean;       // true = потрачено
+  bonusAction: boolean;  // true = потрачено
+  reaction: boolean;     // true = потрачено
+  movement: number;      // сколько ft уже потрачено из скорости
+  movementSpeed: number; // базовая скорость в ft (берётся из Combatant.speed)
+
+  // Legendary Actions (опционально, только для монстров с legendary)
+  legendaryActionsAvailable: number;  // сколько осталось в этом раунде
+  legendaryActionsMax: number;        // максимум в раунд (обычно 3)
+
+  // Monster simplification (опционально)
+  isActed: boolean;       // true = монстр уже действовал в этом раунде
+}
+
+// ─── ActionTrackerSnapshot ────────────────────────────────────────────────────
+export interface ActionTrackerSnapshot {
+  combatantId: UUID;
+  actionTracker: ActionTracker;
+  timestamp: number;  // для отладки
+}
+
+// ─── GroupTickResult — discriminated union ────────────────────────────────────
+export type GroupTickResult =
+  | {
+      type: 'next_combatant';
+      previousGroupId: UUID | null;
+      currentGroupId: UUID | null;
+      previousCombatantId: UUID | null;
+      currentCombatantId: UUID | null;
+      round: number;
+      tickResult: null;
+      legendaryActionCombatants: UUID[];
+    }
+  | {
+      type: 'next_group';
+      previousGroupId: UUID | null;
+      currentGroupId: UUID | null;
+      previousCombatantId: UUID | null;
+      currentCombatantId: UUID | null;
+      round: number;
+      tickResult: null;
+      legendaryActionCombatants: UUID[];
+    }
+  | {
+      type: 'new_round';
+      previousGroupId: UUID | null;
+      currentGroupId: UUID | null;
+      previousCombatantId: UUID | null;
+      currentCombatantId: UUID | null;
+      round: number;
+      tickResult: TickResult;
+      legendaryActionCombatants: UUID[];
+    }
+  | {
+      type: 'combat_end';
+      previousGroupId: UUID | null;
+      currentGroupId: UUID | null;
+      previousCombatantId: UUID | null;
+      currentCombatantId: UUID | null;
+      round: number;
+      tickResult: null;
+      legendaryActionCombatants: [];
+    }
+  | {
+      type: 'legendary_action_opportunity';
+      previousGroupId: UUID | null;
+      currentGroupId: UUID | null;
+      previousCombatantId: UUID | null;
+      currentCombatantId: UUID | null;
+      round: number;
+      tickResult: null;
+      legendaryActionCombatants: UUID[];
+    };
+
+// ─── GroupInitiativeRoll ──────────────────────────────────────────────────────
+export interface GroupInitiativeRoll {
+  groupId: UUID;
+  groupName: string;
+  roll: number;           // результат d20
+  modifier: number;       // модификатор
+  total: number;          // roll + modifier
+  manual: boolean;        // true если DM выставил вручную
+}
+
+// ─── StartBattleParams ────────────────────────────────────────────────────────
+export interface StartBattleParams {
+  name: string;                         // Encounter name
+  environment?: string;                 // Encounter environment
+  notes?: string;                       // Encounter notes
+  groups: {
+    name: string;
+    type: InitiativeGroup['type'];
+    combatantIds: UUID[];
+    initiative?: number;       // опционально — если DM уже выставил
+    initModifier?: number;     // опционально — модификатор группы
+    initMode?: 'group' | 'individual';
+  }[];
+}
+
+// ─── RemoveFromGroupResult ────────────────────────────────────────────────────
+export interface RemoveFromGroupResult {
+  updatedEncounter: Encounter;
+  removedCombatant: Combatant;
+  groupSurvivors: Combatant[];   // оставшиеся члены группы
+  groupDeleted: boolean;         // true если группа полностью удалена
+  newCurrentGroupId: UUID | null;  // скорректированный currentGroupId
+}
+
+// ─── Encounter (active combat) v3 ────────────────────────────────────────────
 export interface Encounter {
   id: UUID;
   name: string;
   campaignId: UUID | null;
   combatants: Combatant[];
   round: number;
-  turnIndex: number;
-  turnOrder: UUID[]; // ordered list of combatant IDs
   isActive: boolean;
   startTime: number;
   environment: string;
   notes: string;
+  // ── Track C: Initiative Groups ──
+  initiativeGroups: InitiativeGroup[];  // группы инициативы
+  currentGroupId: UUID | null;          // какая группа ходит сейчас
+  groupTurnIndex: number;               // индекс группы в initiativeGroups
+  actionTrackerHistory: ActionTrackerSnapshot[];  // история для prevTurn()
+  // @deprecated — удалены в v3:
+  // turnIndex: number;
+  // turnOrder: UUID[];
 }
 
 // ─── Campaign ────────────────────────────────────────────────────────────────
