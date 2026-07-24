@@ -1,0 +1,28 @@
+{
+  "name": "dnd-combat-tracker",
+  "version": "1.0.0",
+  "description": "A combat tracker application for Dungeons & Dragons sessions.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shBDUF/dnd-combat-tracker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/shBDUF/dnd-combat-tracker/issues"
+  },
+  "homepage": "https://github.com/shBDUF/dnd-combat-tracker#readme",
+  "dependencies": {
+    "dexie": "^4.4.4",
+    "immer": "^11.1.15",
+    "nanoid": "^6.0.0",
+    "typescript": "^7.0.2",
+    "zustand": "^5.0.14"
+  }
+}
