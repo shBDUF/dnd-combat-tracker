@@ -1,5 +1,5 @@
 // ============================================================================
-// Zustand Stores with Dexie Sync
+// Zustand Stores with Dexie Sync — Track C: Initiative Groups + Action Economy
 // ============================================================================
 // Two Zustand stores with Immer for immutable updates:
 // - useCombatStore: manages active Encounter + Combatants + effects/conditions
@@ -20,6 +20,11 @@ import type {
   UUID,
   TickResult,
   DeathSaveResult,
+  GroupTickResult,
+  InitiativeGroup,
+  StartBattleParams,
+  RemoveFromGroupResult,
+  GroupInitiativeRoll,
 } from '../types/index.js';
 import { createId } from '../types/index.js';
 import { db } from './db.js';
@@ -36,12 +41,26 @@ import {
   removeCondition as removeConditionPure,
   applyDeathSave as applyDeathSavePure,
 } from '../engine/conditions.js';
-import { buildTurnOrder } from '../engine/roll.js';
+import {
+  nextTurn as groupsNextTurn,
+  prevTurn as groupsPrevTurn,
+  initEncounter as initEncounterFromEngine,
+  getCurrentCombatant,
+  getGroupForCombatant,
+  removeCombatantFromGroup,
+  createDefaultActionTracker,
+} from '../engine/groups.js';
+import {
+  rollAllGroups as rollAllGroupsPure,
+  rerollGroup as rerollGroupPure,
+  setGroupInitiative as setGroupInitiativePure,
+} from '../engine/roll.js';
 
 // ─── Combat State ────────────────────────────────────────────────────────────
 
 export interface CombatState {
   activeEncounter: Encounter | null;
+  initiativeRolled: boolean;
   isLoading: boolean;
   error: string | null;
 }
@@ -49,15 +68,28 @@ export interface CombatState {
 export interface CombatActions {
   // Encounter lifecycle
   initEncounter: (encounter: Encounter) => void;
+  initEncounterFromParams: (params: StartBattleParams) => void;
   loadEncounter: (id: UUID) => Promise<void>;
   endCombat: () => Promise<void>;
 
-  // Turn management
-  nextTurn: () => TickResult | null;
-  prevTurn: () => void;
+  // Turn management (groups)
+  nextTurn: () => GroupTickResult | null;
+  prevTurn: () => GroupTickResult | null;
+
+  // Initiative
+  rollInitiative: () => GroupInitiativeRoll[];
+  rollGroup: (groupId: UUID) => GroupInitiativeRoll;
+  setGroupInitiative: (groupId: UUID, value: number) => void;
+
+  // Group management
+  createGroup: (name: string, type: InitiativeGroup['type']) => UUID;
+  addCombatantToGroup: (combatantId: UUID, groupId: UUID) => void;
+  removeCombatantFromGroupAction: (combatantId: UUID) => RemoveFromGroupResult | null;
+  reorderGroup: (groupId: UUID, newOrder: UUID[]) => void;
 
   // Combatant management
-  addCombatant: (combatant: Combatant) => void;
+  addCombatant: (combatant: Combatant, groupId?: UUID) => void;
+  addCombatantGroup: (template: Partial<Combatant>, count: number) => UUID[];
   removeCombatant: (combatantId: UUID) => void;
   updateCombatant: (combatantId: UUID, updates: Partial<Combatant>) => void;
 
@@ -65,6 +97,11 @@ export interface CombatActions {
   damageCombatant: (combatantId: UUID, damage: number) => void;
   healCombatant: (combatantId: UUID, amount: number) => void;
   setTempHp: (combatantId: UUID, tempHp: number) => void;
+
+  // Action Economy
+  toggleAction: (combatantId: UUID, type: 'action' | 'bonusAction' | 'reaction' | 'legendary') => void;
+  setMovement: (combatantId: UUID, amount: number) => void;
+  resetActions: (combatantId: UUID) => void;
 
   // Effects & Conditions
   applyEffect: (combatantId: UUID, effect: Effect) => void;
@@ -95,6 +132,7 @@ export const useCombatStore = create<CombatStore>()(
   immer((set, get) => ({
     // ─── State ──────────────────────────────────────────────────────
     activeEncounter: null,
+    initiativeRolled: false,
     isLoading: false,
     error: null,
 
@@ -102,9 +140,20 @@ export const useCombatStore = create<CombatStore>()(
     initEncounter: (encounter) =>
       set((state) => {
         state.activeEncounter = encounter;
+        state.initiativeRolled = false;
         state.isLoading = false;
         state.error = null;
       }),
+
+    initEncounterFromParams: (params) => {
+      const encounter = initEncounterFromEngine(params);
+      set((state) => {
+        state.activeEncounter = encounter;
+        state.initiativeRolled = false;
+        state.isLoading = false;
+        state.error = null;
+      });
+    },
 
     loadEncounter: async (id) => {
       set((state) => {
@@ -115,6 +164,7 @@ export const useCombatStore = create<CombatStore>()(
         if (encounter) {
           set((state) => {
             state.activeEncounter = encounter;
+            state.initiativeRolled = encounter.initiativeGroups?.some(g => g.initiative > 0) ?? false;
             state.isLoading = false;
           });
         } else {
@@ -138,14 +188,13 @@ export const useCombatStore = create<CombatStore>()(
         ...activeEncounter,
         isActive: false,
       };
-      // Save the ended encounter to DB first
       set((state) => {
         state.activeEncounter = ended;
       });
       await saveToDb();
-      // Then clear activeEncounter so UI returns to empty state
       set((state) => {
         state.activeEncounter = null;
+        state.initiativeRolled = false;
       });
     },
 
@@ -154,103 +203,261 @@ export const useCombatStore = create<CombatStore>()(
       const { activeEncounter } = get();
       if (!activeEncounter) return null;
 
-      // Find next non-dead combatant
-      const totalAlive = activeEncounter.combatants.filter(
-        (c) => !c.isDead && c.currentHp > 0
-      ).length;
-      if (totalAlive === 0) return null; // everyone dead
-
-      let nextIndex = (activeEncounter.turnIndex + 1) % activeEncounter.turnOrder.length;
-      let safety = 0;
-      while (
-        safety < activeEncounter.turnOrder.length &&
-        activeEncounter.combatants.find(
-          (c) => c.id === activeEncounter.turnOrder[nextIndex]
-        )?.isDead
-      ) {
-        nextIndex = (nextIndex + 1) % activeEncounter.turnOrder.length;
-        safety++;
-      }
-
-      // A new round starts when we wrap around to the first turn index
-      const isNewRound = nextIndex <= activeEncounter.turnIndex || safety > 0;
-
-      let tickResult: TickResult | null = null;
-
-      if (isNewRound) {
-        // Tick all combatants at the start of a new round
-        const updatedCombatants = activeEncounter.combatants.map((c) => {
-          const result = tickRound(c);
-          return result.combatant;
-        });
-        tickResult = {
-          expiredEffects: [],
-          triggeredSaves: [],
-          updatedCombatants: updatedCombatants.map((c) => c.id),
-          concentrationBroken: [],
-        };
-        set((state) => {
-          if (state.activeEncounter) {
-            state.activeEncounter.combatants = updatedCombatants;
-            state.activeEncounter.round += 1;
-            state.activeEncounter.turnIndex = nextIndex;
-          }
-        });
-      } else {
-        set((state) => {
-          if (state.activeEncounter) {
-            state.activeEncounter.turnIndex = nextIndex;
-          }
-        });
-      }
-
-      return tickResult;
+      const { updatedEncounter, result } = groupsNextTurn(activeEncounter);
+      set((state) => {
+        state.activeEncounter = updatedEncounter;
+      });
+      return result;
     },
 
     prevTurn: () => {
+      const { activeEncounter } = get();
+      if (!activeEncounter) return null;
+
+      const { updatedEncounter, result } = groupsPrevTurn(activeEncounter);
+      set((state) => {
+        state.activeEncounter = updatedEncounter;
+      });
+      return result;
+    },
+
+    // ─── Initiative ─────────────────────────────────────────────────
+    rollInitiative: () => {
+      const { activeEncounter } = get();
+      if (!activeEncounter) return [];
+
+      const { updatedEncounter, rolls } = rollAllGroupsPure(activeEncounter);
+      set((state) => {
+        state.activeEncounter = updatedEncounter;
+        state.initiativeRolled = true;
+      });
+      return rolls;
+    },
+
+    rollGroup: (groupId) => {
+      const { activeEncounter } = get();
+      if (!activeEncounter) throw new Error('No active encounter');
+
+      const { updatedEncounter, roll } = rerollGroupPure(activeEncounter, groupId);
+      set((state) => {
+        state.activeEncounter = updatedEncounter;
+      });
+      return roll;
+    },
+
+    setGroupInitiative: (groupId, value) => {
+      const { activeEncounter } = get();
+      if (!activeEncounter) return;
+
+      const updated = setGroupInitiativePure(activeEncounter, groupId, value);
+      set((state) => {
+        state.activeEncounter = updated;
+      });
+    },
+
+    // ─── Group management ───────────────────────────────────────────
+    createGroup: (name, type) => {
+      const id = createId();
       set((state) => {
         if (!state.activeEncounter) return;
-        const prevIndex =
-          state.activeEncounter.turnIndex === 0
-            ? state.activeEncounter.turnOrder.length - 1
-            : state.activeEncounter.turnIndex - 1;
-        state.activeEncounter.turnIndex = prevIndex;
+        const newGroup: InitiativeGroup = {
+          id,
+          name,
+          type,
+          initiative: 0,
+          initModifier: 0,
+          initMode: 'group',
+          combatantIds: [],
+          currentOrder: [],
+          currentIndex: 0,
+          isActive: true,
+        };
+        state.activeEncounter.initiativeGroups.push(newGroup);
+      });
+      return id;
+    },
+
+    addCombatantToGroup: (combatantId, groupId) => {
+      set((state) => {
+        if (!state.activeEncounter) return;
+        const group = state.activeEncounter.initiativeGroups.find(g => g.id === groupId);
+        if (!group) return;
+        const combatant = state.activeEncounter.combatants.find(c => c.id === combatantId);
+        if (!combatant) return;
+
+        // Remove from old group first
+        for (const g of state.activeEncounter.initiativeGroups) {
+          g.combatantIds = g.combatantIds.filter(id => id !== combatantId);
+          g.currentOrder = g.currentOrder.filter(id => id !== combatantId);
+        }
+
+        // Add to new group
+        group.combatantIds.push(combatantId);
+        group.currentOrder.push(combatantId);
+        combatant.initiativeGroupId = groupId;
+      });
+    },
+
+    removeCombatantFromGroupAction: (combatantId) => {
+      const { activeEncounter } = get();
+      if (!activeEncounter) return null;
+
+      const result = removeCombatantFromGroup(activeEncounter, combatantId);
+      set((state) => {
+        state.activeEncounter = result.updatedEncounter;
+      });
+      return result;
+    },
+
+    reorderGroup: (groupId, newOrder) => {
+      set((state) => {
+        if (!state.activeEncounter) return;
+        const group = state.activeEncounter.initiativeGroups.find(g => g.id === groupId);
+        if (!group) return;
+        group.currentOrder = newOrder;
       });
     },
 
     // ─── Combatant management ───────────────────────────────────────
-    addCombatant: (combatant) =>
+    addCombatant: (combatant, groupId?) => {
       set((state) => {
         if (!state.activeEncounter) return;
-        const newTurnOrder = buildTurnOrder([
-          ...state.activeEncounter.combatants,
-          combatant,
-        ]);
-        state.activeEncounter.combatants.push(combatant);
-        state.activeEncounter.turnOrder = newTurnOrder;
-      }),
 
-    removeCombatant: (combatantId) =>
+        // Add to combatants array
+        state.activeEncounter.combatants.push(combatant);
+
+        if (groupId) {
+          // Add to existing group
+          const group = state.activeEncounter.initiativeGroups.find(g => g.id === groupId);
+          if (group) {
+            group.combatantIds.push(combatant.id);
+            group.currentOrder.push(combatant.id);
+            combatant.initiativeGroupId = groupId;
+          }
+        } else {
+          // Create new group for this combatant
+          const newGroup: InitiativeGroup = {
+            id: createId(),
+            name: combatant.isPlayer ? 'Players' : combatant.name,
+            type: combatant.isPlayer ? 'players' : 'monsters',
+            initiative: combatant.initiative,
+            initModifier: combatant.initModifier,
+            initMode: 'group',
+            combatantIds: [combatant.id],
+            currentOrder: [combatant.id],
+            currentIndex: 0,
+            isActive: true,
+          };
+          state.activeEncounter.initiativeGroups.push(newGroup);
+          combatant.initiativeGroupId = newGroup.id;
+        }
+      });
+    },
+
+    addCombatantGroup: (template, count) => {
+      const ids: UUID[] = [];
+      const groupId = createId();
       set((state) => {
         if (!state.activeEncounter) return;
-        state.activeEncounter.combatants =
-          state.activeEncounter.combatants.filter(
-            (c) => c.id !== combatantId
-          );
-        state.activeEncounter.turnOrder =
-          state.activeEncounter.turnOrder.filter(
-            (id) => id !== combatantId
-          );
-        if (
-          state.activeEncounter.turnIndex >=
-          state.activeEncounter.turnOrder.length
-        ) {
-          state.activeEncounter.turnIndex = Math.max(
-            0,
-            state.activeEncounter.turnOrder.length - 1
-          );
+
+        for (let i = 0; i < count; i++) {
+          const id = createId();
+          ids.push(id);
+          const combatant: Combatant = {
+            id,
+            name: template.name || 'Unknown',
+            initiative: template.initiative ?? 0,
+            initModifier: template.initModifier ?? 0,
+            ac: template.ac ?? 10,
+            maxHp: template.maxHp ?? 10,
+            currentHp: template.currentHp ?? template.maxHp ?? 10,
+            tempHp: 0,
+            conditions: [],
+            effects: [],
+            isConcentrating: false,
+            concentrationOn: null,
+            isPlayer: template.isPlayer ?? false,
+            isMonster: template.isMonster ?? true,
+            monsterId: template.monsterId,
+            groupId: template.groupId,
+            deathsaves: { successes: 0, failures: 0, isStable: false },
+            sortIndex: state.activeEncounter.combatants.length + i,
+            isDead: false,
+            notes: template.notes ?? '',
+            initiativeGroupId: null,
+            actionTracker: createDefaultActionTracker(template.speed ?? 30),
+            speed: template.speed ?? 30,
+            combatantGroupId: groupId,
+            combatantGroupSize: count,
+            combatantGroupIndex: i,
+          };
+          state.activeEncounter.combatants.push(combatant);
         }
-      }),
+
+        // Create initiative group for the monster group
+        const newGroup: InitiativeGroup = {
+          id: createId(),
+          name: `${count}x ${template.name || 'Unknown'}`,
+          type: 'monsters',
+          initiative: template.initiative ?? 0,
+          initModifier: template.initModifier ?? 0,
+          initMode: 'group',
+          combatantIds: ids,
+          currentOrder: ids,
+          currentIndex: 0,
+          isActive: true,
+        };
+        state.activeEncounter.initiativeGroups.push(newGroup);
+
+        // Set initiativeGroupId on all combatants
+        for (const id of ids) {
+          const c = state.activeEncounter.combatants.find(c => c.id === id);
+          if (c) c.initiativeGroupId = newGroup.id;
+        }
+      });
+      return ids;
+    },
+
+    removeCombatant: (combatantId) => {
+      set((state) => {
+        if (!state.activeEncounter) return;
+
+        // Remove from combatants array
+        state.activeEncounter.combatants = state.activeEncounter.combatants.filter(
+          c => c.id !== combatantId
+        );
+
+        // Remove from groups
+        for (const group of state.activeEncounter.initiativeGroups) {
+          group.combatantIds = group.combatantIds.filter(id => id !== combatantId);
+          group.currentOrder = group.currentOrder.filter(id => id !== combatantId);
+        }
+
+        // Remove empty groups
+        const beforeCount = state.activeEncounter.initiativeGroups.length;
+        state.activeEncounter.initiativeGroups = state.activeEncounter.initiativeGroups.filter(
+          g => g.combatantIds.length > 0
+        );
+        const groupDeleted = beforeCount !== state.activeEncounter.initiativeGroups.length;
+
+        // Guard currentGroupId (Blocker 2 fix)
+        const enc = state.activeEncounter;
+        if (groupDeleted || !enc.initiativeGroups.find(
+          g => g.id === enc.currentGroupId
+        )) {
+          if (state.activeEncounter.initiativeGroups.length > 0) {
+            const nextPos = Math.min(
+              state.activeEncounter.groupTurnIndex,
+              state.activeEncounter.initiativeGroups.length - 1
+            );
+            state.activeEncounter.currentGroupId = state.activeEncounter.initiativeGroups[nextPos].id;
+            state.activeEncounter.groupTurnIndex = nextPos;
+          } else {
+            state.activeEncounter.currentGroupId = null;
+          }
+        }
+      });
+    },
 
     updateCombatant: (combatantId, updates) =>
       set((state) => {
@@ -263,6 +470,7 @@ export const useCombatStore = create<CombatStore>()(
         }
       }),
 
+    // ─── HP management ──────────────────────────────────────────────
     damageCombatant: (combatantId, damage) =>
       set((state) => {
         if (!state.activeEncounter) return;
@@ -271,7 +479,6 @@ export const useCombatStore = create<CombatStore>()(
         );
         if (!combatant) return;
 
-        // Apply temp HP first
         let remaining = damage;
         if (combatant.tempHp > 0) {
           const absorbed = Math.min(combatant.tempHp, remaining);
@@ -283,10 +490,8 @@ export const useCombatStore = create<CombatStore>()(
 
         if (combatant.currentHp <= 0) {
           if (combatant.isPlayer) {
-            // Players fall unconscious, not dead
             combatant.isDead = false;
           } else {
-            // Monsters die
             combatant.isDead = true;
           }
         }
@@ -305,13 +510,11 @@ export const useCombatStore = create<CombatStore>()(
         );
         if (combatant.currentHp > 0) {
           combatant.isDead = false;
-          // Remove Unconscious condition when healed above 0
           if (combatant.isPlayer) {
             const unconsciousIdx = combatant.conditions.findIndex(
               (c) => c.name === 'Unconscious'
             );
             if (unconsciousIdx !== -1) {
-              // Remove Unconscious and its auto-applied conditions
               const unconsciousId = combatant.conditions[unconsciousIdx].id;
               const idsToRemove = [unconsciousId, unconsciousId + '_prone', unconsciousId + '_incapacitated'];
               combatant.conditions = combatant.conditions.filter(
@@ -331,6 +534,59 @@ export const useCombatStore = create<CombatStore>()(
         if (!combatant) return;
         combatant.tempHp = Math.max(0, tempHp);
       }),
+
+    // ─── Action Economy ─────────────────────────────────────────────
+    toggleAction: (combatantId, type) => {
+      set((state) => {
+        if (!state.activeEncounter) return;
+        const combatant = state.activeEncounter.combatants.find(c => c.id === combatantId);
+        if (!combatant) return;
+
+        const at = combatant.actionTracker;
+        switch (type) {
+          case 'action':
+            at.action = !at.action;
+            break;
+          case 'bonusAction':
+            at.bonusAction = !at.bonusAction;
+            break;
+          case 'reaction':
+            at.reaction = !at.reaction;
+            break;
+          case 'legendary':
+            if (at.legendaryActionsAvailable > 0) {
+              at.legendaryActionsAvailable--;
+            }
+            break;
+        }
+      });
+    },
+
+    setMovement: (combatantId, amount) => {
+      set((state) => {
+        if (!state.activeEncounter) return;
+        const combatant = state.activeEncounter.combatants.find(c => c.id === combatantId);
+        if (!combatant) return;
+        combatant.actionTracker.movement = Math.max(0, Math.min(amount, combatant.actionTracker.movementSpeed));
+      });
+    },
+
+    resetActions: (combatantId) => {
+      set((state) => {
+        if (!state.activeEncounter) return;
+        const combatant = state.activeEncounter.combatants.find(c => c.id === combatantId);
+        if (!combatant) return;
+        combatant.actionTracker = {
+          ...combatant.actionTracker,
+          action: false,
+          bonusAction: false,
+          reaction: false,
+          movement: 0,
+          legendaryActionsAvailable: combatant.actionTracker.legendaryActionsMax,
+          isActed: false,
+        };
+      });
+    },
 
     // ─── Effects & Conditions ───────────────────────────────────────
     applyEffect: (combatantId, effect) =>
@@ -425,13 +681,12 @@ export const useCombatStore = create<CombatStore>()(
       const { activeEncounter } = get();
       if (!activeEncounter) return null;
 
-      const expiredEffects: import('../types/index.js').Effect[] = [];
+      const expiredEffects: Effect[] = [];
       const triggeredSaves: import('../types/index.js').SaveReminder[] = [];
 
       const updatedCombatants = activeEncounter.combatants.map((c) => {
-        const currentTurnId =
-          activeEncounter.turnOrder[activeEncounter.turnIndex];
-        const result = tickRound(c, currentTurnId);
+        const currentTurnId = getCurrentCombatant(activeEncounter)?.id ?? null;
+        const result = tickRound(c, currentTurnId ?? undefined);
         expiredEffects.push(...result.expired);
         triggeredSaves.push(...result.triggeredSaves);
         return result.combatant;
