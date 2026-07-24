@@ -234,7 +234,7 @@ export function CampaignPanel(_props: CampaignPanelProps) {
     if (!confirmDelete) return;
     await deleteCampaign(confirmDelete);
     setConfirmDelete(null);
-    navigate('/characters');
+    navigate('/campaign');
   }, [confirmDelete, deleteCampaign, navigate]);
 
   const handleCharacterImport = useCallback(

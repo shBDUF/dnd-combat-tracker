@@ -138,10 +138,15 @@ export const useCombatStore = create<CombatStore>()(
         ...activeEncounter,
         isActive: false,
       };
+      // Save the ended encounter to DB first
       set((state) => {
         state.activeEncounter = ended;
       });
       await saveToDb();
+      // Then clear activeEncounter so UI returns to empty state
+      set((state) => {
+        state.activeEncounter = null;
+      });
     },
 
     // ─── Turn management ────────────────────────────────────────────
@@ -149,9 +154,26 @@ export const useCombatStore = create<CombatStore>()(
       const { activeEncounter } = get();
       if (!activeEncounter) return null;
 
-      const nextIndex =
-        (activeEncounter.turnIndex + 1) % activeEncounter.turnOrder.length;
-      const isNewRound = nextIndex === 0;
+      // Find next non-dead combatant
+      const totalAlive = activeEncounter.combatants.filter(
+        (c) => !c.isDead && c.currentHp > 0
+      ).length;
+      if (totalAlive === 0) return null; // everyone dead
+
+      let nextIndex = (activeEncounter.turnIndex + 1) % activeEncounter.turnOrder.length;
+      let safety = 0;
+      while (
+        safety < activeEncounter.turnOrder.length &&
+        activeEncounter.combatants.find(
+          (c) => c.id === activeEncounter.turnOrder[nextIndex]
+        )?.isDead
+      ) {
+        nextIndex = (nextIndex + 1) % activeEncounter.turnOrder.length;
+        safety++;
+      }
+
+      // A new round starts when we wrap around to the first turn index
+      const isNewRound = nextIndex <= activeEncounter.turnIndex || safety > 0;
 
       let tickResult: TickResult | null = null;
 
@@ -241,7 +263,6 @@ export const useCombatStore = create<CombatStore>()(
         }
       }),
 
-    // ─── HP management ──────────────────────────────────────────────
     damageCombatant: (combatantId, damage) =>
       set((state) => {
         if (!state.activeEncounter) return;
@@ -261,7 +282,13 @@ export const useCombatStore = create<CombatStore>()(
         combatant.currentHp = Math.max(0, combatant.currentHp - remaining);
 
         if (combatant.currentHp <= 0) {
-          combatant.isDead = true;
+          if (combatant.isPlayer) {
+            // Players fall unconscious, not dead
+            combatant.isDead = false;
+          } else {
+            // Monsters die
+            combatant.isDead = true;
+          }
         }
       }),
 
@@ -278,6 +305,20 @@ export const useCombatStore = create<CombatStore>()(
         );
         if (combatant.currentHp > 0) {
           combatant.isDead = false;
+          // Remove Unconscious condition when healed above 0
+          if (combatant.isPlayer) {
+            const unconsciousIdx = combatant.conditions.findIndex(
+              (c) => c.name === 'Unconscious'
+            );
+            if (unconsciousIdx !== -1) {
+              // Remove Unconscious and its auto-applied conditions
+              const unconsciousId = combatant.conditions[unconsciousIdx].id;
+              const idsToRemove = [unconsciousId, unconsciousId + '_prone', unconsciousId + '_incapacitated'];
+              combatant.conditions = combatant.conditions.filter(
+                (c) => !idsToRemove.includes(c.id)
+              );
+            }
+          }
         }
       }),
 

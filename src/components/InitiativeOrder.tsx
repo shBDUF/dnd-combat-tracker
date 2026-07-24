@@ -55,10 +55,20 @@ export function InitiativeOrder() {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
+    // Reorder the filtered array (visible order)
     const oldIndex = filtered.findIndex((c) => c.id === active.id);
     const newIndex = filtered.findIndex((c) => c.id === over.id);
     const reordered = arrayMove(filtered, oldIndex, newIndex);
 
+    // Update turnOrder to match the new order
+    const newTurnOrder = reordered.map((c) => c.id);
+    // Directly update the store's turnOrder
+    const store = useCombatStore.getState();
+    if (store.activeEncounter) {
+      store.activeEncounter.turnOrder = newTurnOrder;
+    }
+
+    // Also update sortIndex as tiebreaker for any re-sorts
     reordered.forEach((c, idx) => {
       updateCombatant(c.id, { sortIndex: idx });
     });

@@ -90,28 +90,40 @@ export function CurrentTurn({ selectedCombatant }: CurrentTurnProps) {
 
   const target = selectedCombatant || currentCombatant;
 
-  // Auto-show concentration modal when concentrating combatant takes damage
-  useEffect(() => {
-    if (target && target.isConcentrating && damageAmount) {
-      const dmg = parseInt(damageAmount);
-      if (!isNaN(dmg) && dmg > 0) {
-        const dc = Math.max(10, Math.floor(dmg / 2));
-        setConcentrationDC(dc);
-        setDamageSource(damageType || 'damage');
-        setShowConcentrationModal(true);
-      }
+  // ── Concentration check helper ──
+  const checkConcentration = useCallback((amount: number, type: string) => {
+    if (target && target.isConcentrating && amount > 0) {
+      const dc = Math.max(10, Math.floor(amount / 2));
+      setConcentrationDC(dc);
+      setDamageSource(type || 'damage');
+      setShowConcentrationModal(true);
     }
-  }, [damageAmount, target?.isConcentrating]);
+  }, [target]);
 
-  // Auto-show death save modal when target is unconscious
+  // ── Death save modal: show only when player is at 0 HP and unconscious ──
+  // Track last known HP to detect the moment HP drops to 0
+  const [lastKnownHp, setLastKnownHp] = useState<number | null>(null);
+  const prevTargetIdRef = React.useRef<string | null>(null);
+
   useEffect(() => {
-    if (target && target.conditions.some((c) => c.name === 'Unconscious' || c.name === 'Bloodied' && target.currentHp <= 0)) {
-      // Check if death saves are applicable (player characters)
-      if (!target.isMonster && target.currentHp <= 0) {
+    if (!target) return;
+    // Reset HP tracking when target changes
+    if (target.id !== prevTargetIdRef.current) {
+      prevTargetIdRef.current = target.id;
+      setLastKnownHp(target.currentHp);
+      return;
+    }
+    // Only show modal when HP just dropped to 0 (not on every render)
+    if (lastKnownHp !== null && lastKnownHp > 0 && target.currentHp <= 0) {
+      const isUnconscious = target.conditions.some((c) => c.name === 'Unconscious');
+      if (!target.isMonster && isUnconscious) {
         setShowDeathSaveModal(true);
       }
     }
-  }, [target?.currentHp, target?.conditions]);
+    setLastKnownHp(target.currentHp);
+  }, [target?.currentHp, target?.conditions, target?.id]);
+
+  // ── Handlers ──
 
   const handleQuickDamage = useCallback(() => {
     if (!target) return;
@@ -141,18 +153,22 @@ export function CurrentTurn({ selectedCombatant }: CurrentTurnProps) {
       const amount = parseInt(damageMatch[1]);
       const type = damageMatch[2] || '';
       damageCombatant(target.id, amount);
+      // Trigger concentration check AFTER damage is applied
+      checkConcentration(amount, type);
       setQuickInput('');
       return;
     }
-  }, [target, quickInput, damageCombatant, healCombatant, setTempHp]);
+  }, [target, quickInput, damageCombatant, healCombatant, setTempHp, checkConcentration]);
 
   const handleDamage = useCallback(() => {
     if (!target) return;
     const amount = parseInt(damageAmount);
     if (isNaN(amount) || amount <= 0) return;
     damageCombatant(target.id, amount);
+    // Trigger concentration check AFTER damage is applied
+    checkConcentration(amount, damageType);
     setDamageAmount('');
-  }, [target, damageAmount, damageCombatant]);
+  }, [target, damageAmount, damageType, damageCombatant, checkConcentration]);
 
   const handleHeal = useCallback(() => {
     if (!target) return;
@@ -260,6 +276,10 @@ export function CurrentTurn({ selectedCombatant }: CurrentTurnProps) {
           ? 'Character is stable.'
           : `Death save recorded (${result.deathsaves.successes}S / ${result.deathsaves.failures}F)`
       );
+      // Auto-close modal if character is alive, dead, or stable
+      if (result.result === 'alive' || result.result === 'dead' || result.result === 'stable') {
+        setTimeout(() => setShowDeathSaveModal(false), 2000);
+      }
     },
     [target, applyDeathSave]
   );

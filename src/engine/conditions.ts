@@ -302,7 +302,7 @@ export function applyDeathSave(
 ): { combatant: Combatant; result: DeathSaveResult; deathsaves: DeathSaves } {
   let ds = { ...combatant.deathsaves };
 
-  // Natural 20: stabilize + 1 HP
+  // Natural 20: stabilize + 1 HP and remove Unconscious
   if (roll === 20) {
     ds = { successes: 0, failures: 0, isStable: true };
     return {
@@ -311,6 +311,9 @@ export function applyDeathSave(
         deathsaves: ds,
         currentHp: 1,
         isDead: false,
+        conditions: combatant.conditions.filter(
+          (c) => c.name !== 'Unconscious'
+        ),
       },
       result: 'alive',
       deathsaves: ds,
