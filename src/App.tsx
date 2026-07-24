@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { CombatTracker } from './components/CombatTracker';
 import { CharacterManager } from './components/CharacterManager';
@@ -16,6 +16,17 @@ const NAV_ITEMS = [
 ];
 
 export default function App() {
+  const [dark, setDark] = useState(() => {
+    const saved = localStorage.getItem('dnd-theme');
+    if (saved) return saved === 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark);
+    localStorage.setItem('dnd-theme', dark ? 'dark' : 'light');
+  }, [dark]);
+
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-background flex">
@@ -45,8 +56,16 @@ export default function App() {
             </NavLink>
           ))}
 
-          <div className="mt-auto pt-4 border-t border-border">
-            <p className="text-xs text-muted-foreground">
+          <div className="mt-auto pt-4 border-t border-border flex flex-col gap-2">
+            {/* Theme Toggle */}
+            <button
+              onClick={() => setDark((d: boolean) => !d)}
+              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              <span>{dark ? '☀️' : '🌙'}</span>
+              <span>{dark ? 'Light Mode' : 'Dark Mode'}</span>
+            </button>
+            <p className="text-xs text-muted-foreground px-3">
               v1.0.0
             </p>
           </div>
