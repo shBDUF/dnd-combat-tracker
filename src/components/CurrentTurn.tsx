@@ -83,7 +83,10 @@ export function CurrentTurn({ selectedCombatant }: CurrentTurnProps) {
   const [showDeathSaveModal, setShowDeathSaveModal] = useState(false);
   const [deathSaveMessage, setDeathSaveMessage] = useState('');
 
-  const currentCombatantId = activeEncounter?.turnOrder[activeEncounter?.turnIndex ?? 0] ?? null;
+  const currentGroup = activeEncounter?.initiativeGroups?.find(
+    g => g.id === activeEncounter?.currentGroupId
+  );
+  const currentCombatantId = currentGroup?.currentOrder[currentGroup?.currentIndex ?? 0] ?? null;
   const currentCombatant = currentCombatantId
     ? activeEncounter?.combatants.find((c) => c.id === currentCombatantId)
     : null;

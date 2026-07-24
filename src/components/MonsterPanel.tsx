@@ -34,12 +34,11 @@ export function MonsterPanel({ combatant }: MonsterPanelProps) {
     );
   }
 
-  const isGroup = combatant.isGroup;
+  const isGroupMonster = combatant.combatantGroupId !== null;
 
   // Roll damage for an action
   const rollDamage = (action: Action) => {
     if (action.damageDice) {
-      // Simple dice parser: "2d6+3" -> total
       const match = action.damageDice.match(/(\d+)d(\d+)(?:\+(\d+))?/);
       if (match) {
         const count = parseInt(match[1]);
@@ -63,40 +62,6 @@ export function MonsterPanel({ combatant }: MonsterPanelProps) {
     }
   };
 
-  const handleGroupDamage = () => {
-    if (!combatant || !isGroup) return;
-    const dmg = parseInt(groupDamage);
-    if (isNaN(dmg) || dmg <= 0) return;
-
-    // For group monsters, damage applies to individualHp
-    // If damage >= individualHp, one dies
-    const hp = combatant.individualHp;
-    if (dmg >= hp) {
-      // One dies
-      const newSize = (combatant.groupSize || 1) - 1;
-      if (newSize <= 0) {
-        // All dead
-        updateCombatant(combatant.id, {
-          groupSize: 0,
-          isDead: true,
-          currentHp: 0,
-        });
-      } else {
-        updateCombatant(combatant.id, {
-          groupSize: newSize,
-          currentHp: Math.max(0, combatant.currentHp - dmg),
-        });
-      }
-    } else {
-      // Damage the individual
-      updateCombatant(combatant.id, {
-        individualHp: hp - dmg,
-        currentHp: Math.max(0, combatant.currentHp - dmg),
-      });
-    }
-    setGroupDamage('');
-  };
-
   const statsEntries = monsterBlock
     ? Object.entries(monsterBlock.stats).map(([key, val]) => {
         const mod = Math.floor(((val as number) - 10) / 2);
@@ -110,9 +75,9 @@ export function MonsterPanel({ combatant }: MonsterPanelProps) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           {combatant.name}
-          {combatant.isGroup && (
+          {isGroupMonster && (
             <Badge variant="secondary" className="ml-2">
-              {combatant.groupSize}x remaining
+              #{combatant.combatantGroupIndex + 1}/{combatant.combatantGroupSize}
             </Badge>
           )}
         </CardTitle>
@@ -134,17 +99,11 @@ export function MonsterPanel({ combatant }: MonsterPanelProps) {
             <span className="text-muted-foreground">Init</span>{' '}
             <span className="font-mono">{combatant.initiative}</span>
           </div>
-          {isGroup && (
-            <>
-              <div>
-                <span className="text-muted-foreground">Individual HP</span>{' '}
-                <span className="font-mono">{combatant.individualHp}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Alive</span>{' '}
-                <span className="font-mono">{combatant.groupSize}</span>
-              </div>
-            </>
+          {isGroupMonster && (
+            <div>
+              <span className="text-muted-foreground">Group of</span>{' '}
+              <span className="font-mono">{combatant.combatantGroupSize}</span>
+            </div>
           )}
         </div>
 
@@ -229,28 +188,6 @@ export function MonsterPanel({ combatant }: MonsterPanelProps) {
           <div className="text-xs">
             <span className="font-medium text-muted-foreground">DMG Res: </span>
             {monsterBlock.damageResistances.join(', ')}
-          </div>
-        )}
-
-        {/* Group damage input */}
-        {isGroup && (
-          <div className="space-y-2 p-3 bg-muted/30 rounded-lg border">
-            <label className="text-sm font-medium">Group Damage</label>
-            <div className="flex gap-2">
-              <Input
-                type="number"
-                placeholder="Damage amount"
-                value={groupDamage}
-                onChange={(e) => setGroupDamage(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleGroupDamage()}
-              />
-              <Button variant="destructive" size="sm" onClick={handleGroupDamage}>
-                Apply
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Damage &ge; individual HP kills one. Excess damage does not overflow.
-            </p>
           </div>
         )}
 

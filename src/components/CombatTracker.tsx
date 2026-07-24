@@ -1,17 +1,31 @@
 import React, { useState } from 'react';
 import { useCombatStore, useCampaignStore } from '../storage/store';
-import { Combatant, Encounter, createId } from '../types';
+import { Combatant, Encounter, InitiativeGroup, createId, ActionTracker } from '../types';
 import { SAMPLE_MONSTERS } from '../data/sample-monsters';
 import { InitiativeOrder } from './InitiativeOrder';
 import { CurrentTurn } from './CurrentTurn';
+import { ActionTrackerPanel } from './ActionTrackerPanel';
 import { EffectsPanel } from './EffectsPanel';
 import { MonsterPanel } from './MonsterPanel';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from './ui/card';
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from './ui/card';
 import { Badge } from './ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 import { Select } from './ui/select';
+
+function createDefaultAT(speed = 30): ActionTracker {
+  return {
+    action: false,
+    bonusAction: false,
+    reaction: false,
+    movement: 0,
+    movementSpeed: speed,
+    legendaryActionsAvailable: 0,
+    legendaryActionsMax: 0,
+    isActed: false,
+  };
+}
 
 export function CombatTracker() {
   const activeEncounter = useCombatStore((s) => s.activeEncounter);
@@ -19,6 +33,7 @@ export function CombatTracker() {
   const addCombatant = useCombatStore((s) => s.addCombatant);
   const nextTurn = useCombatStore((s) => s.nextTurn);
   const prevTurn = useCombatStore((s) => s.prevTurn);
+  const rollInitiative = useCombatStore((s) => s.rollInitiative);
   const endCombat = useCombatStore((s) => s.endCombat);
   const campaign = useCampaignStore((s) => s.activeCampaign);
 
@@ -29,7 +44,7 @@ export function CombatTracker() {
   const [showNewBattle, setShowNewBattle] = useState(false);
   const [battleName, setBattleName] = useState('New Encounter');
 
-  // Add participant forms (shown inline in the modal)
+  // Add participant forms
   const [selectedMonster, setSelectedMonster] = useState('');
   const [monsterCount, setMonsterCount] = useState('1');
   const [monsterInitiative, setMonsterInitiative] = useState('');
@@ -39,51 +54,56 @@ export function CombatTracker() {
   const [playerAc, setPlayerAc] = useState('');
   const [pendingCombatants, setPendingCombatants] = useState<Combatant[]>([]);
 
-  // Add participant helpers
   const handleAddMonster = () => {
     if (!selectedMonster) return;
     const template = SAMPLE_MONSTERS.find((m) => m.name === selectedMonster);
     if (!template) return;
     const count = Math.max(1, parseInt(monsterCount) || 1);
     const init = parseInt(monsterInitiative) || 0;
+    const initMod = Math.floor((template.stats.dex - 10) / 2);
+    const speed = 30; // default, could parse from template.speed
 
     if (count > 1) {
-      // Group monster
-      const group: Combatant = {
-        id: createId(),
-        name: template.name,
-        initiative: init,
-        initModifier: Math.floor((template.stats.dex - 10) / 2),
-        ac: template.ac,
-        maxHp: template.maxHp * count,
-        currentHp: template.maxHp * count,
-        tempHp: 0,
-        conditions: [],
-        effects: [],
-        isConcentrating: false,
-        concentrationOn: null,
-        isPlayer: false,
-        isMonster: true,
-        monsterId: template.id,
-        groupId: createId(),
-        isGroup: true,
-        groupSize: count,
-        individualHp: template.maxHp,
-        deathsaves: { successes: 0, failures: 0, isStable: false },
-        sortIndex: pendingCombatants.length,
-        isDead: false,
-        notes: '',
-      };
-      setPendingCombatants((prev) => [...prev, group]);
+      const groupId = createId();
+      for (let i = 0; i < count; i++) {
+        const combatant: Combatant = {
+          id: createId(),
+          name: template.name,
+          initiative: init,
+          initModifier: initMod,
+          ac: template.ac,
+          maxHp: template.maxHp,
+          currentHp: template.maxHp,
+          tempHp: 0,
+          conditions: [],
+          effects: [],
+          isConcentrating: false,
+          concentrationOn: null,
+          isPlayer: false,
+          isMonster: true,
+          monsterId: template.id,
+          groupId: groupId,
+          deathsaves: { successes: 0, failures: 0, isStable: false },
+          sortIndex: pendingCombatants.length + i,
+          isDead: false,
+          notes: '',
+          initiativeGroupId: null,
+          actionTracker: createDefaultAT(speed),
+          speed,
+          combatantGroupId: groupId,
+          combatantGroupSize: count,
+          combatantGroupIndex: i,
+        };
+        setPendingCombatants((prev) => [...prev, combatant]);
+      }
       setMonsterCount('1');
       setMonsterInitiative('');
     } else {
-      // Single monster
-      const monster: Combatant = {
+      const combatant: Combatant = {
         id: createId(),
         name: template.name,
         initiative: init,
-        initModifier: Math.floor((template.stats.dex - 10) / 2),
+        initModifier: initMod,
         ac: template.ac,
         maxHp: template.maxHp,
         currentHp: template.maxHp,
@@ -96,15 +116,18 @@ export function CombatTracker() {
         isMonster: true,
         monsterId: template.id,
         groupId: undefined,
-        isGroup: false,
-        groupSize: 1,
-        individualHp: template.maxHp,
         deathsaves: { successes: 0, failures: 0, isStable: false },
         sortIndex: pendingCombatants.length,
         isDead: false,
         notes: '',
+        initiativeGroupId: null,
+        actionTracker: createDefaultAT(speed),
+        speed,
+        combatantGroupId: null,
+        combatantGroupSize: 1,
+        combatantGroupIndex: 0,
       };
-      setPendingCombatants((prev) => [...prev, monster]);
+      setPendingCombatants((prev) => [...prev, combatant]);
       setMonsterInitiative('');
     }
   };
@@ -115,7 +138,7 @@ export function CombatTracker() {
     const hp = parseInt(playerHp) || 10;
     const ac = parseInt(playerAc) || 10;
 
-    const player: Combatant = {
+    const combatant: Combatant = {
       id: createId(),
       name: playerName,
       initiative: init,
@@ -131,15 +154,18 @@ export function CombatTracker() {
       isPlayer: true,
       isMonster: false,
       groupId: undefined,
-      isGroup: false,
-      groupSize: 1,
-      individualHp: hp,
       deathsaves: { successes: 0, failures: 0, isStable: false },
       sortIndex: pendingCombatants.length + 10,
       isDead: false,
       notes: '',
+      initiativeGroupId: null,
+      actionTracker: createDefaultAT(30),
+      speed: 30,
+      combatantGroupId: null,
+      combatantGroupSize: 1,
+      combatantGroupIndex: 0,
     };
-    setPendingCombatants((prev) => [...prev, player]);
+    setPendingCombatants((prev) => [...prev, combatant]);
     setPlayerName('');
     setPlayerInitiative('');
     setPlayerHp('');
@@ -151,11 +177,11 @@ export function CombatTracker() {
     const sheet = campaign.characters.find((c) => c.id === charId);
     if (!sheet) return;
     const init = parseInt(playerInitiative) || 0;
-    const combatantFromChar: Combatant = {
+    const combatant: Combatant = {
       id: createId(),
       name: sheet.name,
       initiative: init,
-      initModifier: Math.floor((sheet.stats.str - 10) / 2),
+      initModifier: Math.floor((sheet.stats.dex - 10) / 2),
       ac: sheet.ac,
       maxHp: sheet.maxHp,
       currentHp: sheet.maxHp,
@@ -167,26 +193,76 @@ export function CombatTracker() {
       isPlayer: true,
       isMonster: false,
       groupId: undefined,
-      isGroup: false,
-      groupSize: 1,
-      individualHp: sheet.maxHp,
       deathsaves: { successes: 0, failures: 0, isStable: false },
       sortIndex: pendingCombatants.length + 10,
       isDead: false,
       notes: '',
+      initiativeGroupId: null,
+      actionTracker: createDefaultAT(sheet.speed || 30),
+      speed: sheet.speed || 30,
+      combatantGroupId: null,
+      combatantGroupSize: 1,
+      combatantGroupIndex: 0,
     };
-    setPendingCombatants((prev) => [...prev, combatantFromChar]);
+    setPendingCombatants((prev) => [...prev, combatant]);
     setPlayerInitiative('');
   };
 
   const handleStartBattle = () => {
     if (pendingCombatants.length === 0) return;
 
-    // Sort by initiative descending, then by sortIndex as tiebreaker
+    // Sort by initiative descending
     const sorted = [...pendingCombatants].sort((a, b) => {
       if (b.initiative !== a.initiative) return b.initiative - a.initiative;
       return a.sortIndex - b.sortIndex;
     });
+
+    // Build groups
+    const players = sorted.filter(c => c.isPlayer);
+    const monsters = sorted.filter(c => c.isMonster);
+    const groups: InitiativeGroup[] = [];
+
+    if (players.length > 0) {
+      groups.push({
+        id: createId(),
+        name: 'Players',
+        type: 'players',
+        initiative: players[0]?.initiative ?? 0,
+        initModifier: Math.ceil(players.reduce((s, c) => s + c.initModifier, 0) / players.length),
+        initMode: 'group',
+        combatantIds: players.map(c => c.id),
+        currentOrder: players.map(c => c.id),
+        currentIndex: 0,
+        isActive: true,
+      });
+    }
+
+    // Group monsters by combatantGroupId
+    const monsterGroups = new Map<string, Combatant[]>();
+    for (const m of monsters) {
+      const key = m.combatantGroupId || m.id;
+      if (!monsterGroups.has(key)) monsterGroups.set(key, []);
+      monsterGroups.get(key)!.push(m);
+    }
+
+    for (const [, mGroup] of monsterGroups) {
+      const groupId = createId();
+      for (const m of mGroup) {
+        m.initiativeGroupId = groupId;
+      }
+      groups.push({
+        id: groupId,
+        name: mGroup.length > 1 ? `${mGroup.length}x ${mGroup[0].name}` : mGroup[0].name,
+        type: 'monsters',
+        initiative: mGroup[0]?.initiative ?? 0,
+        initModifier: Math.ceil(mGroup.reduce((s, c) => s + c.initModifier, 0) / mGroup.length),
+        initMode: 'group',
+        combatantIds: mGroup.map(c => c.id),
+        currentOrder: mGroup.map(c => c.id),
+        currentIndex: 0,
+        isActive: true,
+      });
+    }
 
     const encounter: Encounter = {
       id: createId(),
@@ -194,12 +270,14 @@ export function CombatTracker() {
       campaignId: campaign?.id || null,
       combatants: sorted,
       round: 1,
-      turnIndex: 0,
-      turnOrder: sorted.map((c) => c.id),
       isActive: true,
       startTime: Date.now(),
       environment: '',
       notes: '',
+      initiativeGroups: groups,
+      currentGroupId: groups[0]?.id ?? null,
+      groupTurnIndex: 0,
+      actionTrackerHistory: [],
     };
 
     initEncounter(encounter);
@@ -207,7 +285,7 @@ export function CombatTracker() {
     setPendingCombatants([]);
   };
 
-  // ── Empty state (no active encounter) ──────────────────────────────
+  // ── Empty state ─────────────────────────────────────────────────
   if (!activeEncounter) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-8">
@@ -241,7 +319,6 @@ export function CombatTracker() {
             </DialogHeader>
 
             <div className="space-y-6">
-              {/* Battle name */}
               <Input
                 label="Encounter Name"
                 value={battleName}
@@ -335,7 +412,7 @@ export function CombatTracker() {
                 )}
               </div>
 
-              {/* Pending participants list */}
+              {/* Pending participants */}
               {pendingCombatants.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="font-medium text-sm">
@@ -345,12 +422,11 @@ export function CombatTracker() {
                     {pendingCombatants.map((c) => (
                       <div key={c.id} className="flex items-center justify-between bg-muted rounded px-3 py-1.5 text-sm">
                         <span>
-                          {c.isGroup ? `${c.groupSize}x ` : ''}{c.name}
+                          {c.combatantGroupId ? `${c.combatantGroupSize}x ` : ''}{c.name}
                         </span>
                         <div className="flex items-center gap-3">
                           <span className="text-muted-foreground">
-                            Init: {c.initiative} | {' '}
-                            {c.isPlayer ? `HP ${c.maxHp} AC ${c.ac}` : `HP ${c.individualHp}`}
+                            Init: {c.initiative} | {c.isPlayer ? `HP ${c.maxHp} AC ${c.ac}` : `HP ${c.maxHp}`}
                           </span>
                           <button
                             className="text-destructive hover:text-red-700 text-xs"
@@ -380,11 +456,15 @@ export function CombatTracker() {
     );
   }
 
-  // ── Active encounter view ─────────────────────────────────────────
-  const currentCombatantId = activeEncounter.turnOrder[activeEncounter.turnIndex];
-  const currentCombatant = activeEncounter.combatants.find(
-    (c) => c.id === currentCombatantId
+  // ── Active encounter view ───────────────────────────────────────
+  const currentGroup = activeEncounter.initiativeGroups.find(
+    g => g.id === activeEncounter.currentGroupId
   );
+  const currentCombatantId = currentGroup?.currentOrder[currentGroup?.currentIndex ?? 0] ?? null;
+  const currentCombatant = currentCombatantId
+    ? activeEncounter.combatants.find((c) => c.id === currentCombatantId)
+    : null;
+
   const selectedCombatant = selectedCombatantId
     ? activeEncounter.combatants.find((c) => c.id === selectedCombatantId) || null
     : null;
@@ -418,6 +498,18 @@ export function CombatTracker() {
               </span>
             </div>
             <div className="h-6 w-px bg-border" />
+            {currentGroup && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Group</span>
+                <span className="font-medium text-sm">
+                  {currentGroup.name}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  (Init: {currentGroup.initiative})
+                </span>
+              </div>
+            )}
+            <div className="h-6 w-px bg-border" />
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Turn</span>
               <span className="font-medium">
@@ -432,6 +524,11 @@ export function CombatTracker() {
           </div>
 
           <div className="flex items-center gap-2">
+            {!activeEncounter.initiativeGroups.some(g => g.initiative > 0) && (
+              <Button variant="outline" size="sm" onClick={() => rollInitiative()}>
+                Roll Initiative
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={handlePrevTurn}>
               ◄ Prev
             </Button>
@@ -459,9 +556,8 @@ export function CombatTracker() {
           </Card>
         </div>
 
-        {/* Center/Right: Current Turn or Monster Panel */}
+        {/* Center/Right: Current Turn */}
         <div className="lg:col-span-2 space-y-4">
-          {/* View Toggle */}
           {displayCombatant?.isMonster && (
             <div className="flex gap-2">
               <Button
@@ -481,13 +577,16 @@ export function CombatTracker() {
             </div>
           )}
 
+          {displayCombatant && (
+            <ActionTrackerPanel combatant={displayCombatant} />
+          )}
+
           {view === 'monster' && displayCombatant?.isMonster ? (
             <MonsterPanel combatant={displayCombatant} />
           ) : (
             <CurrentTurn selectedCombatant={displayCombatant} />
           )}
 
-          {/* Effects Panel */}
           <EffectsPanel combatant={displayCombatant} />
         </div>
       </div>

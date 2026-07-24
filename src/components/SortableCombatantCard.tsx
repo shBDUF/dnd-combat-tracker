@@ -13,6 +13,7 @@ interface SortableCombatantCardProps {
   position: number;
   onRemove: () => void;
   onSelect?: () => void;
+  showGroupInfo?: boolean;
 }
 
 export function SortableCombatantCard({
@@ -21,6 +22,7 @@ export function SortableCombatantCard({
   position,
   onRemove,
   onSelect,
+  showGroupInfo,
 }: SortableCombatantCardProps) {
   const {
     attributes,
@@ -38,7 +40,10 @@ export function SortableCombatantCard({
 
   const hpPercent = combatant.maxHp > 0 ? (combatant.currentHp / combatant.maxHp) * 100 : 0;
   const isDead = combatant.isDead || combatant.currentHp <= 0;
-  const isGroup = combatant.isGroup;
+  const isGroupMonster = combatant.combatantGroupId !== null;
+  const monsterLabel = isGroupMonster
+    ? `${combatant.name} #${combatant.combatantGroupIndex + 1}`
+    : combatant.name;
 
   return (
     <div
@@ -69,7 +74,7 @@ export function SortableCombatantCard({
             isDead && 'line-through text-muted-foreground'
           )}
         >
-          {isGroup ? `${combatant.groupSize}x ${combatant.name}` : combatant.name}
+          {monsterLabel}
         </span>
         <span className="text-sm font-mono text-muted-foreground">
           {combatant.initiative}
@@ -141,10 +146,10 @@ export function SortableCombatantCard({
         )}
       </div>
 
-      {/* Group HP detail */}
-      {isGroup && combatant.groupSize > 0 && (
+      {/* Group info */}
+      {showGroupInfo && isGroupMonster && (
         <div className="text-xs text-muted-foreground mt-1">
-          Individual HP: {combatant.individualHp} | Alive: {combatant.groupSize}
+          Group of {combatant.combatantGroupSize}
         </div>
       )}
     </div>

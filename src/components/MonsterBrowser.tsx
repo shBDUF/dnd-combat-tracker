@@ -91,39 +91,25 @@ function AddToCombatDialog({
 }) {
   const [quantity, setQuantity] = useState(1);
   const addCombatant = useCombatStore((s) => s.addCombatant);
+  const addCombatantGroup = useCombatStore((s) => s.addCombatantGroup);
   const activeEncounter = useCombatStore((s) => s.activeEncounter);
 
   const handleAdd = useCallback(() => {
     if (!activeEncounter) return;
 
     if (quantity > 1) {
-      const groupId = createId();
-      const groupCombatant: Combatant = {
-        id: createId(),
-        name: `${monster.name} (×${quantity})`,
+      addCombatantGroup({
+        name: monster.name,
         initiative: 0,
         initModifier: statModifier(monster.stats.dex),
         ac: monster.ac,
-        maxHp: monster.maxHp * quantity,
-        currentHp: monster.maxHp * quantity,
-        tempHp: 0,
-        conditions: [],
-        effects: [],
-        isConcentrating: false,
-        concentrationOn: null,
-        isPlayer: false,
+        maxHp: monster.maxHp,
+        currentHp: monster.maxHp,
         isMonster: true,
         monsterId: monster.id,
-        groupId,
-        isGroup: true,
-        groupSize: quantity,
-        individualHp: monster.maxHp,
-        deathsaves: { successes: 0, failures: 0, isStable: false },
-        sortIndex: 0,
-        isDead: false,
+        speed: 30,
         notes: '',
-      };
-      addCombatant(groupCombatant);
+      } as Combatant, quantity);
     } else {
       const combatant: Combatant = {
         id: createId(),
@@ -142,13 +128,16 @@ function AddToCombatDialog({
         isMonster: true,
         monsterId: monster.id,
         groupId: undefined,
-        isGroup: false,
-        groupSize: 1,
-        individualHp: monster.maxHp,
         deathsaves: { successes: 0, failures: 0, isStable: false },
         sortIndex: 0,
         isDead: false,
         notes: '',
+        initiativeGroupId: null,
+        actionTracker: { action: false, bonusAction: false, reaction: false, movement: 0, movementSpeed: 30, legendaryActionsAvailable: 0, legendaryActionsMax: 0, isActed: false },
+        speed: 30,
+        combatantGroupId: null,
+        combatantGroupSize: 1,
+        combatantGroupIndex: 0,
       };
       addCombatant(combatant);
     }
